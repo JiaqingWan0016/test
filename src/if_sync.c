@@ -10,17 +10,24 @@
 #include "if_sync.h"
 #include "if_addr.h"
 
+/* 提高结构体成员可读性的宏定义 */
+#define IPSEC_IF_NAME(item)          ((item)->if_name)           /* IPsec接口名称 */
+#define BINDING_IF_NAME(item)        ((item)->ibc.dev)           /* 绑定接口名称 */
+#define LINK_PRIORITY(item)          ((item)->ibc.linkpriority) /* 链路优先级 */
+#define SPECIFIED_IPV4_ADDR(item)    ((item)->ibc.ip)            /* IPv4指定地址 */
+#define SPECIFIED_IPV6_ADDR(item)    ((item)->ibc.ipv6)          /* IPv6指定地址 */
+
 /* 执行ipsec接口的down/up操作 */
-static int ipsec_if_down_up(const char *if_name)
+static int ipsec_if_down_up(const char *ipsec_if_name)
 {
     char cmd[256];
     int ret;
     
     /* 执行down操作 */
-    snprintf(cmd, sizeof(cmd), "ifconfig %s down", if_name);
+    snprintf(cmd, sizeof(cmd), "ifconfig %s down", ipsec_if_name);
     ret = system(cmd);
     if (ret != 0) {
-        log_write(LOG_LEVEL_ERROR, "Failed to bring down interface %s: %s", if_name, strerror(errno));
+        log_write(LOG_LEVEL_ERROR, "Failed to bring down IPsec interface %s: %s", ipsec_if_name, strerror(errno));
         return -1;
     }
     
@@ -28,10 +35,10 @@ static int ipsec_if_down_up(const char *if_name)
     usleep(100000);  /* 100ms */
     
     /* 执行up操作 */
-    snprintf(cmd, sizeof(cmd), "ifconfig %s up", if_name);
+    snprintf(cmd, sizeof(cmd), "ifconfig %s up", ipsec_if_name);
     ret = system(cmd);
     if (ret != 0) {
-        log_write(LOG_LEVEL_ERROR, "Failed to bring up interface %s: %s", if_name, strerror(errno));
+        log_write(LOG_LEVEL_ERROR, "Failed to bring up IPsec interface %s: %s", ipsec_if_name, strerror(errno));
         return -1;
     }
     
@@ -46,7 +53,7 @@ static int ipsec_if_down_up(const char *if_name)
 }
 
 /* 同步接口状态 */
-int sync_interface_state(const char *if_name)
+int sync_interface_state(const char *binding_if_name)
 {
     struct ifreq ifr;
     int sock;
@@ -61,7 +68,7 @@ int sync_interface_state(const char *if_name)
     
     /* 获取接口信息 */
     memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, if_name, IFNAMSIZ - 1);
+    strncpy(ifr.ifr_name, binding_if_name, IFNAMSIZ - 1);
     
     if (ioctl(sock, SIOCGIFFLAGS, &ifr) < 0) {
         log_write(LOG_LEVEL_ERROR, "Failed to get interface flags: %s", strerror(errno));
@@ -69,21 +76,21 @@ int sync_interface_state(const char *if_name)
         return -1;
     }
     
-    /* 遍历所有ipsec接口 */
+    /* 遍历所有ipsec接口配置 */
     for (i = 0; i < g_ctx.conf_head.item_num; i++) {
         const IFBINDCONF_NAME *item = &g_ctx.conf_items[i];
         
-        /* 检查是否绑定到当前接口 */
-        if (strcmp(item->ibc.dev, if_name) == 0) {
+        /* 检查当前绑定接口是否与配置项匹配 */
+        if (strcmp(BINDING_IF_NAME(item), binding_if_name) == 0) {
             struct linkinfo new_info;
             struct linkinfo old_info;
             int changes = 0;
             
             /* 初始化新的链路信息 */
             memset(&new_info, 0, sizeof(new_info));
-            new_info.linkpriority = item->ibc.linkpriority;
-            strncpy(new_info.virtualinterface, item->if_name, PHYSICALIF_LEN - 1);
-            strncpy(new_info.physical, item->ibc.dev, PHYSICALIF_LEN - 1);
+            new_info.linkpriority = LINK_PRIORITY(item);
+            strncpy(new_info.virtualinterface, IPSEC_IF_NAME(item), PHYSICALIF_LEN - 1);
+            strncpy(new_info.physical, BINDING_IF_NAME(item), PHYSICALIF_LEN - 1);
             
             /* 获取当前接口状态 */
             new_info.linkstate = (ifr.ifr_flags & IFF_UP) ? 1 : 0;
@@ -95,14 +102,14 @@ int sync_interface_state(const char *if_name)
             
             /* 获取IPv4地址 */
             struct if_ipv4_addr ipv4;
-            if (get_if_ipv4_addr(if_name, &ipv4, item->ibc.ip) >= 0) {
+            if (get_if_ipv4_addr(binding_if_name, &ipv4, SPECIFIED_IPV4_ADDR(item)) >= 0) {
                 new_info.interfaceip = ipv4.addr;
                 new_info.netmask = ipv4.netmask;
             }
             
             /* 获取IPv6地址 */
             struct if_ipv6_addr ipv6;
-            if (get_if_ipv6_addr(if_name, &ipv6, item->ibc.ipv6) >= 0) {
+            if (get_if_ipv6_addr(binding_if_name, &ipv6, SPECIFIED_IPV6_ADDR(item)) >= 0) {
                 memcpy(new_info.ipv6, ipv6.addr, sizeof(new_info.ipv6));
             }
             
@@ -110,12 +117,12 @@ int sync_interface_state(const char *if_name)
             if (read_shared_memory(&old_info) >= 0) {
                 /* 比较信息变化 */
                 if (strcmp(old_info.virtualinterface, new_info.virtualinterface) != 0) {
-                    log_write(LOG_LEVEL_INFO, "Virtual interface changed: %s -> %s", 
+                    log_write(LOG_LEVEL_INFO, "IPsec interface changed: %s -> %s", 
                              old_info.virtualinterface, new_info.virtualinterface);
                     changes = 1;
                 }
                 if (strcmp(old_info.physical, new_info.physical) != 0) {
-                    log_write(LOG_LEVEL_INFO, "Physical interface changed: %s -> %s", 
+                    log_write(LOG_LEVEL_INFO, "Binding interface changed: %s -> %s", 
                              old_info.physical, new_info.physical);
                     changes = 1;
                 }
@@ -150,7 +157,7 @@ int sync_interface_state(const char *if_name)
             
             /* 只有在信息发生变化时才更新共享内存和通知vdcd */
             if (changes) {
-                log_write(LOG_LEVEL_INFO, "Interface %s information changed, updating shared memory", if_name);
+                log_write(LOG_LEVEL_INFO, "Interface %s information changed, updating shared memory", binding_if_name);
                 
                 /* 更新共享内存 */
                 if (update_shared_memory(&new_info) < 0) {
@@ -173,11 +180,11 @@ int sync_interface_state(const char *if_name)
                     mask.s_addr = new_info.netmask;
                     
                     snprintf(cmd, sizeof(cmd), "ifconfig %s %s netmask %s", 
-                            item->if_name,
+                            IPSEC_IF_NAME(item),
                             inet_ntoa(addr),
                             inet_ntoa(mask));
                     if (system(cmd) != 0) {
-                        log_write(LOG_LEVEL_ERROR, "Failed to set IPv4 address for %s", item->if_name);
+                        log_write(LOG_LEVEL_ERROR, "Failed to set IPv4 address for IPsec interface %s", IPSEC_IF_NAME(item));
                     }
                 }
                 
@@ -189,25 +196,27 @@ int sync_interface_state(const char *if_name)
                     
                     inet_ntop(AF_INET6, &addr, ipv6_str, sizeof(ipv6_str));
                     snprintf(cmd, sizeof(cmd), "ifconfig %s inet6 add %s/128", 
-                            item->if_name, ipv6_str);
+                            IPSEC_IF_NAME(item),
+                            ipv6_str);
                     if (system(cmd) != 0) {
-                        log_write(LOG_LEVEL_ERROR, "Failed to set IPv6 address for %s", item->if_name);
+                        log_write(LOG_LEVEL_ERROR, "Failed to set IPv6 address for IPsec interface %s", IPSEC_IF_NAME(item));
                     }
                 }
                 
                 /* 设置ipsec接口的MTU */
                 snprintf(cmd, sizeof(cmd), "ifconfig %s mtu %d", 
-                        item->if_name, new_info.mtu);
+                        IPSEC_IF_NAME(item),
+                        new_info.mtu);
                 if (system(cmd) != 0) {
-                    log_write(LOG_LEVEL_ERROR, "Failed to set MTU for %s", item->if_name);
+                    log_write(LOG_LEVEL_ERROR, "Failed to set MTU for IPsec interface %s", IPSEC_IF_NAME(item));
                 }
                 
                 /* 执行ipsec接口的down/up操作和whack命令 */
-                if (ipsec_if_down_up(item->if_name) < 0) {
-                    log_write(LOG_LEVEL_ERROR, "Failed to bring down/up interface %s", item->if_name);
+                if (ipsec_if_down_up(IPSEC_IF_NAME(item)) < 0) {
+                    log_write(LOG_LEVEL_ERROR, "Failed to bring down/up IPsec interface %s", IPSEC_IF_NAME(item));
                 }
             } else {
-                log_write(LOG_LEVEL_DEBUG, "Interface %s information unchanged, skipping update", if_name);
+                log_write(LOG_LEVEL_DEBUG, "Interface %s information unchanged, skipping update", binding_if_name);
             }
         }
     }
