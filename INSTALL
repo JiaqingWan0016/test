@@ -1,0 +1,86 @@
+构建与安装 LINKD
+=================
+
+依赖项
+-------
+构建 LINKD 需要以下依赖项：
+
+* GCC C编译器（支持C99标准）
+* Autoconf 2.69+
+* Automake 1.15+
+* libtool
+* Check（可选，用于单元测试）
+* pthread库
+
+构建步骤
+--------
+
+1. 初始化构建环境：
+
+```
+./autogen.sh
+```
+
+2. 配置项目：
+
+```
+./configure
+```
+
+如果您想要自定义安装路径，可以使用 `--prefix` 选项：
+
+```
+./configure --prefix=/usr
+```
+
+3. 编译项目：
+
+```
+make
+```
+
+4. 运行单元测试（可选）：
+
+```
+make check
+```
+
+5. 安装：
+
+```
+sudo make install
+```
+
+配置文件
+--------
+配置文件位于 `/tos/conf/linkd.conf`，格式为一行文本，包含空格分隔的网络接口名称：
+
+```
+eth0 eth1 wlan0
+```
+
+使用说明
+--------
+启动守护进程：
+
+```
+linkd -d
+```
+
+或指定定时间隔：
+
+```
+linkd -d -t 30
+```
+
+使用客户端更改定时间隔：
+
+```
+linkd_client interval 60
+```
+
+退出守护进程：
+
+```
+linkd_client exit
+``` 
